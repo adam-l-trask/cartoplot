@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Geoplot — a lightweight d3-geo plotter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<style>
+  :root{
+    --paper:#fbfbf9; --panel:#ffffff; --hair:#e7e4dc; --hair-strong:#d8d4ca;
+    --ink:#20201d; --muted:#6c685f; --faint:#9a958a;
+    --accent:#c1572e;            /* survey orange — used only for active states + selection */
+    --accent-weak:#c1572e22;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--paper); color:var(--ink); font-family:var(--sans);
+    font-size:13px; line-height:1.45; display:flex; height:100vh; overflow:hidden;
+  }
+  svg{overflow:hidden}
+
+  /* ---------- control rail ---------- */
+  .rail{
+    width:268px; flex:0 0 268px; height:100%; overflow-y:auto;
+    background:var(--panel); border-right:1px solid var(--hair);
+    padding:18px 18px 28px;
+  }
+  .brand{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+  .brand h1{font-size:15px;font-weight:650;letter-spacing:-0.01em;margin:0}
+  .brand .v{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .tagline{color:var(--muted);font-size:11.5px;margin:0 0 18px}
+
+  .group{margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid var(--hair)}
+  .group:last-child{border-bottom:none}
+  .eyebrow{
+    font-family:var(--mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 9px;
+  }
+  label.field{display:block;margin-bottom:10px}
+  label.field > span{display:block;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+
+  select, input[type=number]{
+    width:100%;font-family:var(--sans);font-size:12.5px;color:var(--ink);
+    background:var(--paper);border:1px solid var(--hair-strong);border-radius:6px;
+    padding:6px 8px;appearance:none;
+  }
+  input[type=number]{font-family:var(--mono);font-size:12px}
+  select:focus,input:focus{outline:2px solid var(--accent-weak);border-color:var(--accent)}
+
+  /* segmented control */
+  .seg{display:flex;border:1px solid var(--hair-strong);border-radius:6px;overflow:hidden}
+  .seg button{
+    flex:1;border:none;background:var(--paper);color:var(--muted);
+    font-family:var(--mono);font-size:11px;letter-spacing:0.04em;text-transform:uppercase;
+    padding:7px 4px;cursor:pointer;border-right:1px solid var(--hair-strong);
+  }
+  .seg button:last-child{border-right:none}
+  .seg button[aria-pressed=true]{background:var(--accent);color:#fff}
+
+  /* toggle row */
+  .toggle{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;cursor:pointer}
+  .toggle span{font-size:12.5px}
+  .switch{position:relative;width:34px;height:19px;flex:0 0 34px;
+    background:var(--hair-strong);border-radius:999px;transition:background .15s}
+  .switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;
+    background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px #0003}
+  .toggle input{position:absolute;opacity:0}
+  .toggle input:checked + .switch{background:var(--accent)}
+  .toggle input:checked + .switch::after{transform:translateX(15px)}
+  .toggle input:focus-visible + .switch{outline:2px solid var(--accent-weak);outline-offset:2px}
+
+  /* color rows */
+  .swatch{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .swatch label{font-size:12px;color:var(--muted)}
+  .swatch input[type=color]{
+    -webkit-appearance:none;appearance:none;width:30px;height:22px;padding:0;border:none;
+    background:none;cursor:pointer;border-radius:5px;overflow:hidden;
+  }
+  .swatch input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+  .swatch input[type=color]::-webkit-color-swatch{border:1px solid var(--hair-strong);border-radius:5px}
+
+  .bounds-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .hint-text{font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.4}
+  .hint-text b{color:var(--ink);font-weight:600}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:3px;
+    background:var(--hair-strong);outline:none;margin:7px 0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;
+    border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid #fff;box-shadow:0 1px 3px #0003}
+  input[type=range]::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--accent);
+    cursor:pointer;border:2px solid #fff;box-shadow:0 1px 3px #0003}
+  .row{display:flex;gap:8px}
+  button.btn{
+    flex:1;font-family:var(--sans);font-size:12px;font-weight:550;cursor:pointer;
+    padding:8px 10px;border-radius:6px;border:1px solid var(--hair-strong);
+    background:var(--paper);color:var(--ink);
+  }
+  button.btn:hover{border-color:var(--faint)}
+  button.btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  button.btn.primary:hover{background:#000}
+  button.btn:focus-visible{outline:2px solid var(--accent-weak);outline-offset:1px}
+
+  /* ---------- stage ---------- */
+  .stage{flex:1;display:flex;flex-direction:column;min-width:0}
+  .canvas-wrap{flex:1;position:relative;min-height:0;background:
+    /* faint paper grid, very quiet */
+    linear-gradient(#00000003 1px,transparent 1px) 0 0/22px 22px,
+    linear-gradient(90deg,#00000003 1px,transparent 1px) 0 0/22px 22px,
+    var(--paper);}
+  #map{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
+  #map.boxing{cursor:crosshair}
+  #map.panning{cursor:grabbing}
+
+  .rubber{fill:var(--accent-weak);stroke:var(--accent);stroke-width:1;stroke-dasharray:4 3}
+
+  /* status bar — the instrument readout */
+  .status{
+    flex:0 0 auto;display:flex;align-items:center;gap:22px;
+    padding:7px 16px;border-top:1px solid var(--hair);background:var(--panel);
+    font-family:var(--mono);font-size:11px;color:var(--muted);
+  }
+  .status .k{color:var(--faint)}
+  .status b{color:var(--ink);font-weight:550}
+  .status .hint{margin-left:auto;color:var(--faint);font-family:var(--sans);font-size:11px}
+
+  /* overlay (loading / error) */
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#fbfbf9cc;backdrop-filter:blur(1px);z-index:5}
+  .overlay .card{background:var(--panel);border:1px solid var(--hair);border-radius:10px;
+    padding:18px 22px;max-width:420px;box-shadow:0 8px 30px #0000000f}
+  .overlay h3{margin:0 0 6px;font-size:14px}
+  .overlay p{margin:0;color:var(--muted);font-size:12px}
+  .overlay code{font-family:var(--mono);font-size:11px;background:var(--paper);
+    padding:1px 4px;border-radius:4px;border:1px solid var(--hair)}
+  .spin{width:14px;height:14px;border:2px solid var(--hair-strong);border-top-color:var(--accent);
+    border-radius:50%;display:inline-block;margin-right:8px;vertical-align:-2px;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  @media (prefers-reduced-motion:reduce){.spin{animation:none}*{transition:none!important}}
+</style>
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand"><h1>Geoplot</h1><span class="v">d3-geo · no plotly</span></div>
+    <p class="tagline">A lightweight cartographic plotter. Drag to roam, box to zoom, export for print.</p>
+
+    <div class="group">
+      <p class="eyebrow">Projection</p>
+      <label class="field">
+        <span>Map projection</span>
+        <select id="proj">
+          <option value="equirectangular">Equirectangular</option>
+          <option value="mercator">Mercator</option>
+          <option value="naturalEarth" selected>Natural Earth</option>
+          <option value="orthographic">Orthographic (globe)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Vector resolution</span>
+        <select id="res">
+          <option value="110m" selected>110m — coarse, fast</option>
+          <option value="50m">50m — detailed</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">Interaction</p>
+      <div class="seg" role="group" aria-label="Pointer mode">
+        <button id="mode-pan" aria-pressed="true">Pan</button>
+        <button id="mode-box" aria-pressed="false">Box zoom</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">Layers</p>
+      <label class="toggle"><span>Country borders</span>
+        <input type="checkbox" id="borders" checked><i class="switch"></i></label>
+      <label class="toggle"><span>Graticule</span>
+        <input type="checkbox" id="graticule" checked><i class="switch"></i></label>
+      <label class="field" style="margin-top:2px"><span>Graticule spacing (°)</span>
+        <input type="number" id="grat-step" min="1" max="90" step="1" value="30"></label>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">Style</p>
+      <div class="swatch"><label for="c-ocean">Ocean</label><input type="color" id="c-ocean" value="#e8eef2"></div>
+      <div class="swatch"><label for="c-land">Land</label><input type="color" id="c-land" value="#f1ece2"></div>
+      <div class="swatch"><label for="c-coast">Coastline</label><input type="color" id="c-coast" value="#6f6a60"></div>
+      <div class="swatch"><label for="c-border">Borders</label><input type="color" id="c-border" value="#b7afa1"></div>
+      <div class="swatch"><label for="c-grat">Graticule</label><input type="color" id="c-grat" value="#9a958a"></div>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">Lon / Lat bounds</p>
+      <div class="bounds-grid">
+        <label class="field"><span>Lon from</span><input type="number" id="b-lon0" step="any" placeholder="-180"></label>
+        <label class="field"><span>Lon to</span><input type="number" id="b-lon1" step="any" placeholder="180"></label>
+        <label class="field"><span>Lat min</span><input type="number" id="b-latmin" step="any" placeholder="-90"></label>
+        <label class="field"><span>Lat max</span><input type="number" id="b-latmax" step="any" placeholder="90"></label>
+      </div>
+      <p class="hint-text">Longitude sweeps <b>east</b> from “from” to “to”, so order matters: 330→30 wraps the antimeridian (same box as −30→30). Both −180…180 and 0…360 work.</p>
+      <div class="row">
+        <button class="btn" id="apply-bounds">Apply bounds</button>
+        <button class="btn" id="clear-bounds">Whole globe</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">Plot area</p>
+      <label class="field">
+        <span>Aspect ratio</span>
+        <select id="plot-aspect">
+          <option value="0" selected>Fit window</option>
+          <option value="1">1 : 1 (square)</option>
+          <option value="1.3333">4 : 3</option>
+          <option value="1.5">3 : 2</option>
+          <option value="1.7778">16 : 9</option>
+          <option value="2">2 : 1 (wide)</option>
+          <option value="0.75">3 : 4 (portrait)</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Plot size — <span id="plot-size-val">100%</span></span>
+        <input type="range" id="plot-size" min="0.4" max="1" step="0.05" value="1">
+      </label>
+    </div>
+
+    <div class="group">
+      <p class="eyebrow">View &amp; export</p>
+      <div class="row" style="margin-bottom:8px">
+        <button class="btn" id="reset">Reset view</button>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="dl-svg">Download SVG</button>
+        <button class="btn" id="dl-png">PNG</button>
+      </div>
+      <label class="field" style="margin-top:8px">
+        <span>PNG scale</span>
+        <select id="png-scale">
+          <option value="2" selected>2× (figure)</option>
+          <option value="4">4× (print)</option>
+          <option value="1">1× (screen)</option>
+        </select>
+      </label>
+    </div>
+  </aside>
+
+  <main class="stage">
+    <div class="canvas-wrap" id="wrap">
+      <svg id="map"></svg>
+      <div class="overlay" id="overlay">
+        <div class="card"><h3><span class="spin"></span>Loading basemap…</h3>
+          <p>Fetching Natural Earth vectors.</p></div>
+      </div>
+    </div>
+    <div class="status">
+      <span><span class="k">lon</span> <b id="st-lon">—</b></span>
+      <span><span class="k">lat</span> <b id="st-lat">—</b></span>
+      <span><span class="k">scale</span> <b id="st-scale">—</b></span>
+      <span class="hint">drag to pan · shift-drag or box mode to zoom · scroll to zoom · double-click to zoom in</span>
+    </div>
+  </main>
+
+<script>
+"use strict";
+const RAD = Math.PI/180, DEG = 180/Math.PI;
+
+/* ============================================================================
+   PROJECTION REGISTRY
+   azimuthal projections (orthographic) pan by rotating BOTH axes;
+   cylindrical / pseudo-cylindrical pan longitude by rotation, latitude by pixels.
+   ========================================================================== */
+const PROJ = {
+  equirectangular:{ make:()=>d3.geoEquirectangular(),           azimuthal:false },
+  mercator:       { make:()=>d3.geoMercator(),                  azimuthal:false },
+  naturalEarth:   { make:()=>d3.geoNaturalEarth1(),             azimuthal:false },
+  orthographic:   { make:()=>d3.geoOrthographic().clipAngle(90),azimuthal:true  },
+};
+
+const PAD = 14;            // viewport padding used when fitting bounds
+const FRAME_STEPS = 72;    // points per edge when densifying a bounded frame
+
+/* ============================================================================
+   STATE  — everything needed to reproduce a view.
+   scale/translate live in PIXEL space; rotate lives in geographic space.
+   ========================================================================== */
+const state = {
+  type:"naturalEarth", res:"110m",
+  rotate:[0,0,0], scale:null, translate:null,   // null => fit on first render
+  bounds:null,                                   // [[lonW,latS],[lonE,latN]] | null
+  showBorders:true, showGraticule:true, graticuleStep:30,
+  plotAspect:0, plotSize:1,   // 0 aspect = fit window; size = fraction of canvas
+  mode:"pan",
+  color:{ ocean:"#e8eef2", land:"#f1ece2", coast:"#6f6a60", border:"#b7afa1", grat:"#9a958a" },
+};
+
+let W=800, H=600;                 // viewport size in px
+const dataCache = {};             // res -> {land, coast, borders}
+let data = null;
+
+/* ============================================================================
+   GEOMETRY HELPERS
+   ========================================================================== */
+
+// Longitude is cyclic; normalise any value into [-180,180).
+function wrapLon(x){ return ((x+180)%360+360)%360-180; }
+
+// Interpret the (from,to) longitude pair as an EASTWARD sweep. `width` is the
+// eastward distance 0..360 (equal endpoints => full 360 band); `centerLon` is
+// the eastward midpoint and may exceed 180 — rotate() handles that fine.
+function boundsInfo(b){
+  const lon0=b[0][0], lat0=b[0][1], lon1=b[1][0], lat1=b[1][1];
+  let width=((lon1-lon0)%360+360)%360; if(width===0) width=360;
+  return { lon0, lat0, lat1, width, centerLon:lon0+width/2, centerLat:(lat0+lat1)/2 };
+}
+
+// Unified frame: a region is ONE densified polygon; full-globe degrades to Sphere.
+// Each edge is swept eastward in UNWRAPPED space, then every vertex is wrapped
+// into [-180,180]. A box crossing the antimeridian therefore produces a >180°
+// jump between adjacent vertices — exactly what d3's antimeridian clip detects,
+// so it stitches the two halves correctly under any rotation. Equirectangular/
+// Mercator still get collinear points (a plain rectangle); curved projections
+// curve.
+function frameGeometry(bounds){
+  if(!bounds) return {type:"Sphere"};
+  const {lon0,lat0,lat1,width}=boundsInfo(bounds);
+  const ring=[];
+  const lonEdge=(lat,a,b)=>{ for(let i=0;i<FRAME_STEPS;i++){ const t=i/FRAME_STEPS;
+    ring.push([wrapLon(a+(b-a)*t), lat]); } };
+  const latEdge=(lon,a,b)=>{ const wl=wrapLon(lon); for(let i=0;i<FRAME_STEPS;i++){ const t=i/FRAME_STEPS;
+    ring.push([wl, a+(b-a)*t]); } };
+  lonEdge(lat0, lon0, lon0+width);   // south edge,  west -> east
+  latEdge(lon0+width, lat0, lat1);   // east edge,   south -> north
+  lonEdge(lat1, lon0+width, lon0);   // north edge,  east -> west
+  latEdge(lon0, lat1, lat0);         // west edge,   north -> south
+  ring.push(ring[0].slice());
+  // d3-geo decides a spherical polygon's interior from winding order: a
+  // sub-hemisphere region must be wound CLOCKWISE, or d3 treats the interior
+  // as the whole complement (box renders as a white hole + fitExtent won't
+  // zoom because it measures the complement's bounds). We build CCW, so flip.
+  ring.reverse();
+  return {type:"Polygon", coordinates:[ring]};
+}
+
+// Build a projection for the CURRENT committed view (no fitting). While a drag
+// is in progress we coarsen the adaptive-resampling precision so heavy layers
+// (borders, coast at 50m) stay on screen but cost less per frame; on release we
+// render once more at full precision for a crisp result.
+function currentProjection(){
+  const p = PROJ[state.type].make()
+    .rotate(state.rotate).scale(state.scale).translate(state.translate)
+    .precision(dragging ? 1.4 : 0.4);
+  return p;
+}
+
+// Fit scale/translate (and centering rotation) so `bounds` exactly fills the
+// viewport. fitExtent does the heavy lifting IN PIXEL SPACE, which is why this
+// is automatically correct for Mercator's nonlinear y, Natural Earth's curve,
+// and orthographic's framing — no per-projection center math required.
+// The drawing area within the canvas. "Plot size" insets the map (margins),
+// and the aspect ratio constrains its shape — both independent of zoom, which
+// only governs *which* geography is shown.
+function plotRect(){
+  const a=state.plotAspect, s=state.plotSize;
+  let w,h;
+  if(!a){ w=W*s; h=H*s; }
+  else { const availW=W*s, availH=H*s;
+    if(availW/availH > a){ h=availH; w=h*a; } else { w=availW; h=w/a; } }
+  return { x:(W-w)/2, y:(H-h)/2, w, h };
+}
+
+function fitView(){
+  const meta = PROJ[state.type];
+  const p = meta.make();
+  const b = state.bounds;
+  if(b){
+    const bi = boundsInfo(b);
+    // Centre via rotation: longitude always; latitude only for the globe
+    // (rotating latitude on a cylinder would tilt it into an oblique aspect).
+    p.rotate([-bi.centerLon, meta.azimuthal ? -bi.centerLat : 0, 0]);
+  } else {
+    // Whole-globe: keep the current orientation, but a cylindrical / pseudo-
+    // cylindrical projection only looks right in its NORMAL aspect. Any pitch or
+    // roll (rotate[1]/[2]) carried over from an orthographic drag would tilt it
+    // into an oblique aspect (curved graticule, skewed coastlines), so for those
+    // projections keep only the longitude and zero the rest.
+    p.rotate(meta.azimuthal ? state.rotate : [state.rotate[0], 0, 0]);
+  }
+  const r = plotRect();
+  p.fitExtent([[r.x+PAD, r.y+PAD],[r.x+r.w-PAD, r.y+r.h-PAD]], frameGeometry(b));
+  state.rotate = p.rotate();
+  state.scale = p.scale();
+  state.translate = p.translate();
+}
+
+/* ============================================================================
+   GEOGRAPHIC ZOOM  (wheel / double-click)
+   Zoom scales a lon/lat WINDOW rather than pushing pixels around, so — like box
+   zoom and window-pan — it always re-fits inside the plot area and can never
+   spill off-screen. The window's centre eases toward the cursor's geographic
+   point so it feels like zooming where you point. Zooming out past the whole
+   world snaps back to the clean whole-globe (Sphere) frame.
+   ========================================================================== */
+
+// The current view as a {centre, span} window, whether an explicit box is set
+// or we're on the whole globe.
+function currentViewBounds(){
+  if(state.bounds!==null){
+    const bi = boundsInfo(state.bounds);
+    return { cLon:bi.centerLon, cLat:bi.centerLat, width:bi.width,
+             dLat: state.bounds[1][1]-state.bounds[0][1] };
+  }
+  const r = plotRect();
+  const ctr = currentProjection().invert([r.x+r.w/2, r.y+r.h/2]) || [-state.rotate[0], -state.rotate[1]];
+  return { cLon:ctr[0], cLat:ctr[1], width:360, dLat:180 };   // whole world
+}
+
+// z > 1 zooms in, z < 1 zooms out. cursorPx anchors the zoom.
+function geoZoom(z, cursorPx){
+  const v = currentViewBounds();
+  const nWidth = v.width / z, nDLat = v.dLat / z;
+  if(nWidth >= 360 || nDLat >= 180){               // zoomed out to the whole world
+    if(state.bounds!==null){ state.bounds=null; state.scale=null; render(); }
+    return;
+  }
+  if(nWidth < 0.02 || nDLat < 0.02) return;        // zoom-in floor
+  const f = 1/z;
+  const cur = cursorPx ? currentProjection().invert(cursorPx) : null;
+  let cLon = v.cLon, cLat = v.cLat;
+  if(cur){
+    let dLon = v.cLon - cur[0];
+    if(dLon>180) dLon-=360; else if(dLon<-180) dLon+=360;
+    cLon = cur[0] + dLon*f;
+    cLat = cur[1] + (v.cLat - cur[1])*f;
+  }
+  const halfLat = nDLat/2, halfLon = nWidth/2;
+  cLat = Math.max(-90+halfLat, Math.min(90-halfLat, cLat));
+  state.bounds = [[cLon-halfLon, cLat-halfLat],[cLon+halfLon, cLat+halfLat]];
+  state.scale=null; render();
+}
+
+// Box zoom selects a REGION, so instead of a pixel-space zoom it derives the
+// lon/lat bounds of the drawn rectangle (sampling + round-trip filter + cyclic
+// longitude arc, same envelope logic used for typed bounds), which then gets
+// committed as an explicit framed/clipped box. Returns null for a tiny drag.
+function boundsFromPixelRect(x0,y0,x1,y1){
+  const xa=Math.min(x0,x1), xb=Math.max(x0,x1), ya=Math.min(y0,y1), yb=Math.max(y0,y1);
+  if(xb-xa<6 || yb-ya<6) return null;                 // treat as a click, not a box
+  const proj=currentProjection();
+  const N=16, lons=[], lats=[];
+  for(let i=0;i<=N;i++) for(let j=0;j<=N;j++){
+    const p=[ xa+(xb-xa)*i/N, ya+(yb-ya)*j/N ];
+    const ll=proj.invert(p); if(!ll) continue;
+    const back=proj(ll); if(!back) continue;
+    if(Math.hypot(back[0]-p[0], back[1]-p[1])>0.75) continue;       // not really on the map
+    if(!isFinite(ll[0])||!isFinite(ll[1])||ll[1]<-90||ll[1]>90) continue;
+    lons.push(((ll[0]+180)%360+360)%360-180); lats.push(ll[1]);
+  }
+  if(lats.length<4) return null;
+  const latMin=Math.max(-90, Math.min(...lats)), latMax=Math.min(90, Math.max(...lats));
+  lons.sort((a,b)=>a-b);
+  let maxGap=-1, gi=0;                                              // largest empty arc
+  for(let i=0;i<lons.length;i++){ const n=(i+1)%lons.length;
+    let gap=lons[n]-lons[i]; if(n===0) gap+=360; if(gap>maxGap){ maxGap=gap; gi=i; } }
+  let from=lons[(gi+1)%lons.length], to=lons[gi];
+  if(360-maxGap > 359){ from=-180; to=180; }                       // ~whole circle selected
+  return { from, to, latMin, latMax };
+}
+
+/* ============================================================================
+   VERSOR DRAG (orthographic) — quaternion trackball so the grabbed point
+   stays under the cursor. Compact transcription of Mike Bostock's versor.js.
+   ========================================================================== */
+const versor = {
+  fromAngles([l,p,g]){
+    l*=RAD/2; p*=RAD/2; g*=RAD/2;
+    const sl=Math.sin(l),cl=Math.cos(l),sp=Math.sin(p),cp=Math.cos(p),sg=Math.sin(g),cg=Math.cos(g);
+    return [cl*cp*cg+sl*sp*sg, sl*cp*cg-cl*sp*sg, cl*sp*cg+sl*cp*sg, cl*cp*sg-sl*sp*cg];
+  },
+  toAngles([a,b,c,d]){
+    return [ Math.atan2(2*(a*b+c*d),1-2*(b*b+c*c))*DEG,
+             Math.asin(Math.max(-1,Math.min(1,2*(a*c-d*b))))*DEG,
+             Math.atan2(2*(a*d+b*c),1-2*(c*c+d*d))*DEG ];
+  },
+  cartesian([l,p]){ l*=RAD; p*=RAD; const cp=Math.cos(p); return [cp*Math.cos(l),cp*Math.sin(l),Math.sin(p)]; },
+  delta([x0,y0,z0],[x1,y1,z1]){
+    const w=[y0*z1-z0*y1, z0*x1-x0*z1, x0*y1-y0*x1];
+    const l=Math.hypot(w[0],w[1],w[2]); if(!l) return [1,0,0,0];
+    const t=Math.acos(Math.max(-1,Math.min(1,x0*x1+y0*y1+z0*z1)))/2, s=Math.sin(t);
+    return [Math.cos(t), w[2]/l*s, -w[1]/l*s, w[0]/l*s];
+  },
+  multiply([a0,b0,c0,d0],[a1,b1,c1,d1]){
+    return [ a0*a1-b0*b1-c0*c1-d0*d1, a0*b1+b0*a1+c0*d1-d0*c1,
+             a0*c1-b0*d1+c0*a1+d0*b1, a0*d1+b0*c1-c0*b1+d0*a1 ];
+  },
+};
+
+/* ============================================================================
+   SVG SCAFFOLD  (built once; render() only updates `d` + paint attrs)
+   ========================================================================== */
+const svg = d3.select("#map");
+const defs = svg.append("defs");
+const clip = defs.append("clipPath").attr("id","frame-clip").append("path");
+const gRoot = svg.append("g");
+const elOcean = gRoot.append("path").attr("class","ocean");
+const gClipped = gRoot.append("g").attr("clip-path","url(#frame-clip)");
+const elGrat   = gClipped.append("path").attr("fill","none");
+const elLand   = gClipped.append("path");
+const elCoast  = gClipped.append("path").attr("fill","none").attr("stroke-linejoin","round");
+const elBorder = gClipped.append("path").attr("fill","none").attr("stroke-linejoin","round");
+const elFrame  = gRoot.append("path").attr("fill","none");
+const elRubber = svg.append("rect").attr("class","rubber").style("display","none");
+
+let dragging=false;
+
+// Coalesce rapid redraws (drag/pan) to one per animation frame.
+let rafPending=false;
+function requestRender(){
+  if(rafPending) return;
+  rafPending=true;
+  requestAnimationFrame(()=>{ rafPending=false; render(); });
+}
+
+function render(){
+  if(!state.scale) fitView();
+  const proj = currentProjection();
+  const path = d3.geoPath(proj);
+  const frame = frameGeometry(state.bounds);
+  const framePath = path(frame) || "";
+
+  clip.attr("d", framePath);
+  elFrame.attr("d", framePath).attr("stroke", "#3a3733").attr("stroke-width", state.bounds?1:1.1);
+  elOcean.attr("d", framePath).attr("fill", state.color.ocean);
+
+  if(state.showGraticule){
+    const s = Math.min(90, Math.max(1, state.graticuleStep||30));
+    elGrat.attr("d", path(d3.geoGraticule().step([s,s])()))
+          .attr("stroke", state.color.grat).attr("stroke-width",0.4).attr("stroke-opacity",0.55)
+          .style("display",null);
+  } else elGrat.style("display","none");
+
+  if(data){
+    elLand.attr("d", path(data.land)).attr("fill", state.color.land);
+    elCoast.attr("d", path(data.coast)).attr("stroke", state.color.coast).attr("stroke-width",0.6);
+    if(state.showBorders){
+      elBorder.attr("d", path(data.borders)).attr("stroke", state.color.border)
+              .attr("stroke-width",0.45).style("display",null);
+    } else elBorder.style("display","none");
+  }
+
+  document.getElementById("st-scale").textContent = Math.round(state.scale);
+}
+
+/* ============================================================================
+   DATA  (fetched in the user's browser; tries jsDelivr then unpkg)
+   ========================================================================== */
+function dataUrls(res){ return [
+  `https://cdn.jsdelivr.net/npm/world-atlas@2/countries-${res}.json`,
+  `https://unpkg.com/world-atlas@2/countries-${res}.json`,
+]; }
+
+async function loadData(res){
+  if(dataCache[res]) return dataCache[res];
+  let topo=null;
+  for(const url of dataUrls(res)){
+    try{ const r=await fetch(url); if(!r.ok) continue; topo=await r.json(); break; }catch(e){}
+  }
+  if(!topo) throw new Error("Could not fetch basemap vectors.");
+  const obj = topo.objects.countries;
+  const out = {
+    land:   topojson.merge(topo, obj.geometries),            // MultiPolygon (filled land)
+    coast:  topojson.mesh (topo, obj, (a,b)=>a===b),         // outer coastline
+    borders:topojson.mesh (topo, obj, (a,b)=>a!==b),         // interior country borders
+  };
+  return dataCache[res]=out;
+}
+
+function showOverlay(html){ const o=document.getElementById("overlay");
+  if(html===null){o.style.display="none";return;} o.style.display="flex"; o.querySelector(".card").innerHTML=html; }
+
+async function ensureData(){
+  showOverlay('<h3><span class="spin"></span>Loading '+state.res+' basemap…</h3><p>Fetching Natural Earth vectors.</p>');
+  try{ data = await loadData(state.res); showOverlay(null); render(); }
+  catch(e){
+    showOverlay('<h3>Basemap couldn’t load</h3><p>The sandbox may be blocking outside data requests. '+
+      'The plotting code is fine — save this file and open it locally, or self-host '+
+      '<code>world-atlas</code> JSON and point <code>dataUrls()</code> at it.</p>');
+  }
+}
+
+/* ============================================================================
+   POINTER INTERACTION
+   ========================================================================== */
+const mapNode = document.getElementById("map");
+let gesture=null;  // holds per-drag scratch
+
+function ptr(ev){ const r=mapNode.getBoundingClientRect(); return [ev.clientX-r.left, ev.clientY-r.top]; }
+
+function startPan(p){
+  // If a bounds window is active, pan MOVES that window (keeps its lon/lat span)
+  // rather than releasing to the globe.
+  if(state.bounds!==null){
+    const bi = boundsInfo(state.bounds);
+    gesture = { kind:"panbox", last:p, cLon:bi.centerLon, cLat:bi.centerLat,
+                width:bi.width, dLat: state.bounds[1][1]-state.bounds[0][1] };
+    return;
+  }
+  const proj = currentProjection();
+  if(PROJ[state.type].azimuthal){
+    const inv = proj.invert(p);
+    gesture = { kind:"rotate",
+      q0: versor.fromAngles(state.rotate),
+      v0: inv ? versor.cartesian(inv) : null,
+      r0: state.rotate.slice() };
+  } else {
+    // cylindrical: lon via rotation (∞ wrap), lat via clamped pixel translate.
+    const fb = d3.geoPath(proj).bounds(frameGeometry(state.bounds)); // [[x0,y0],[x1,y1]]
+    gesture = { kind:"pan", p0:p, r0:state.rotate.slice(), t0:state.translate.slice(),
+      // clamp range for dy so the map can't be flung entirely off-screen
+      dyMin: 8 - fb[1][1], dyMax: H-8 - fb[0][1] };
+  }
+}
+function movePan(p){
+  if(!gesture) return;
+  if(gesture.kind==="panbox"){
+    // Shift the window's centre by the drag, keeping its span; re-fit so the
+    // frame stays put and the geography scrolls. Degrees-per-pixel is sampled
+    // from the current projection at the plot centre, so it's correct for every
+    // projection (incl. Mercator's latitude stretch).
+    const proj = currentProjection();
+    const r = plotRect(); const c=[r.x+r.w/2, r.y+r.h/2];
+    const a=proj.invert(c), e=proj.invert([c[0]+10,c[1]]), s=proj.invert([c[0],c[1]+10]);
+    if(a&&e&&s){
+      let lonPerPx=e[0]-a[0];
+      if(lonPerPx>180) lonPerPx-=360; else if(lonPerPx<-180) lonPerPx+=360;
+      lonPerPx/=10;
+      const latPerPx=(s[1]-a[1])/10;
+      const dx=p[0]-gesture.last[0], dy=p[1]-gesture.last[1];
+      gesture.cLon -= dx*lonPerPx;
+      const halfLat=gesture.dLat/2;
+      gesture.cLat = Math.max(-90+halfLat, Math.min(90-halfLat, gesture.cLat - dy*latPerPx));
+      const halfLon=gesture.width/2;
+      state.bounds=[[gesture.cLon-halfLon, gesture.cLat-halfLat],
+                    [gesture.cLon+halfLon, gesture.cLat+halfLat]];
+      fitView();   // keep scale valid for the next move (avoids null-scale under rAF)
+    }
+    gesture.last=p;
+    requestRender();
+    return;
+  }
+  if(gesture.kind==="rotate"){
+    const proj = currentProjection();
+    const inv = proj.invert(p);
+    if(gesture.v0 && inv){
+      const q1 = versor.multiply(gesture.q0, versor.delta(gesture.v0, versor.cartesian(inv)));
+      state.rotate = versor.toAngles(q1);
+    }
+  } else {
+    const dx = p[0]-gesture.p0[0], dy = p[1]-gesture.p0[1];
+    const dLon = dx * DEG / state.scale;                 // dx px -> degrees of longitude
+    state.rotate = [gesture.r0[0] + dLon, gesture.r0[1], gesture.r0[2]];
+    let ty = gesture.t0[1] + dy;
+    ty = Math.max(gesture.t0[1]+gesture.dyMin, Math.min(gesture.t0[1]+gesture.dyMax, ty));
+    state.translate = [gesture.t0[0], ty];
+  }
+  requestRender();
+}
+
+function startBox(p){ gesture={kind:"box", p0:p};
+  elRubber.style("display",null).attr("x",p[0]).attr("y",p[1]).attr("width",0).attr("height",0); }
+function moveBox(p){ if(!gesture) return;
+  const x=Math.min(p[0],gesture.p0[0]), y=Math.min(p[1],gesture.p0[1]);
+  elRubber.attr("x",x).attr("y",y).attr("width",Math.abs(p[0]-gesture.p0[0])).attr("height",Math.abs(p[1]-gesture.p0[1])); }
+function endBox(p){
+  elRubber.style("display","none");
+  if(!gesture) return;
+  const b = boundsFromPixelRect(gesture.p0[0],gesture.p0[1],p[0],p[1]);
+  if(b){
+    setBoundsFields(b);                                   // reflect selection in the boxes
+    state.bounds=[[b.from,b.latMin],[b.to,b.latMax]];     // frame + clip + fit to it
+    state.scale=null;
+    setMode("pan");                                       // box zoom is one-shot -> back to pan
+  }
+  render();
+}
+
+mapNode.addEventListener("pointerdown", ev=>{
+  ev.preventDefault();
+  mapNode.setPointerCapture(ev.pointerId);
+  const p = ptr(ev);
+  const boxMode = state.mode==="box" || ev.shiftKey;
+  dragging=true;
+  if(boxMode){ mapNode.classList.add("boxing"); startBox(p); }   // selecting a region; keep view
+  else       { mapNode.classList.add("panning"); startPan(p); }  // pan (moves the window if bounded)
+});
+mapNode.addEventListener("pointermove", ev=>{
+  const p = ptr(ev);
+  // live coordinate readout
+  const inv = currentProjection().invert(p);
+  document.getElementById("st-lon").textContent = inv ? inv[0].toFixed(2)+"°" : "—";
+  document.getElementById("st-lat").textContent = inv ? inv[1].toFixed(2)+"°" : "—";
+  if(!dragging || !gesture) return;
+  if(gesture.kind==="box") moveBox(p); else movePan(p);
+});
+function finishGesture(ev){
+  if(!dragging) return;
+  const p = ptr(ev);
+  const kind = gesture && gesture.kind;
+  if(kind==="box") endBox(p);
+  dragging=false; gesture=null;
+  mapNode.classList.remove("panning","boxing");
+  render(); // final crisp render at full precision now the drag is over
+  // After moving a bounds window, reflect where it landed in the fields (once,
+  // on release — not continuously, to avoid number-churn while dragging).
+  if(kind==="panbox") syncFieldsToView();
+}
+mapNode.addEventListener("pointerup", finishGesture);
+mapNode.addEventListener("pointercancel", finishGesture);
+
+// wheel zoom -> geographic window zoom, anchored at the cursor
+let wheelTimer=null;
+mapNode.addEventListener("wheel", ev=>{
+  ev.preventDefault();
+  if(state.mode!=="pan") setMode("pan");   // zooming implies you want to look around -> pan
+  const z = Math.pow(1.0016, -ev.deltaY);
+  geoZoom(z, ptr(ev));
+  clearTimeout(wheelTimer); wheelTimer=setTimeout(syncFieldsToView, 200);  // update boxes on settle
+}, {passive:false});
+
+// double-click to zoom in at point
+mapNode.addEventListener("dblclick", ev=>{
+  geoZoom(1.8, ptr(ev));
+  syncFieldsToView();
+});
+
+/* ============================================================================
+   BOUNDS  (input only)
+   The four fields are a "frame this region" control, not a live read-out: free
+   navigation (pan / zoom) does not rewrite them. Touching the map releases the
+   geographic frame back to the globe so you can roam; re-commit the fields (or
+   Reset view) to get a framed region again.
+   ========================================================================== */
+const DEFAULT_BOUNDS = { lon0:-180, lon1:180, latMin:-90, latMax:90 };
+const DEFAULT_STYLE  = { ocean:"#e8eef2", land:"#f1ece2", coast:"#6f6a60", border:"#b7afa1", grat:"#9a958a" };
+
+// Accepts either {lon0,lon1,...} (defaults) or {from,to,...} (box/pan).
+function setBoundsFields(d){
+  const r=v=>Math.round(v*100)/100;
+  const lon0 = d.lon0 ?? d.from, lon1 = d.lon1 ?? d.to;
+  $("b-lon0").value=r(lon0); $("b-lon1").value=r(lon1);
+  $("b-latmin").value=r(d.latMin); $("b-latmax").value=r(d.latMax);
+}
+
+// Reflect the current view's window in the bounds fields (whole globe -> the
+// world defaults). Used after wheel/double-click zoom and window pans.
+function syncFieldsToView(){
+  if(state.bounds===null){ setBoundsFields(DEFAULT_BOUNDS); return; }
+  setBoundsFields({ from:wrapLon(state.bounds[0][0]), to:wrapLon(state.bounds[1][0]),
+                    latMin:state.bounds[0][1], latMax:state.bounds[1][1] });
+}
+
+// Commit the four fields as an explicit, framed box (Enter / focus-out / button).
+function applyBoundsFromFields(){
+  const f=parseFloat($("b-lon0").value),  t=parseFloat($("b-lon1").value),
+        lo=parseFloat($("b-latmin").value), hi=parseFloat($("b-latmax").value);
+  const from=isNaN(f)?-180:f, to=isNaN(t)?180:t;
+  const latMin=Math.max(-90,Math.min(90, isNaN(lo)?-90:lo));
+  const latMax=Math.max(-90,Math.min(90, isNaN(hi)? 90:hi));
+  if(latMax<=latMin) return;            // invalid -> leave the view unchanged
+  state.bounds=[[from,latMin],[to,latMax]]; state.scale=null; render();
+}
+
+// "Whole globe": reset only the lon/lat bounds back to the full world.
+function resetBounds(){
+  state.bounds=null; state.scale=null; setBoundsFields(DEFAULT_BOUNDS); render();
+}
+
+// "Reset view": restore layers, colours, and bounds to defaults (and the view
+// itself), but DO NOT touch the chosen projection or resolution. Controls are
+// synced so the panel reflects the reset state.
+function resetView(){
+  state.showBorders=true; state.showGraticule=true; state.graticuleStep=30;
+  state.color={...DEFAULT_STYLE};
+  state.bounds=null; state.scale=null;
+  state.plotAspect=0; state.plotSize=1;
+  $("borders").checked=true; $("graticule").checked=true; $("grat-step").value=30;
+  $("c-ocean").value=DEFAULT_STYLE.ocean; $("c-land").value=DEFAULT_STYLE.land;
+  $("c-coast").value=DEFAULT_STYLE.coast; $("c-border").value=DEFAULT_STYLE.border;
+  $("c-grat").value=DEFAULT_STYLE.grat;
+  $("plot-aspect").value="0"; $("plot-size").value=1; $("plot-size-val").textContent="100%";
+  setBoundsFields(DEFAULT_BOUNDS);
+  render();
+}
+
+/* ============================================================================
+   CONTROL WIRING
+   ========================================================================== */
+const $ = id=>document.getElementById(id);
+
+$("proj").addEventListener("change", e=>{
+  state.type=e.target.value; state.scale=null; render();   // refit for new projection
+});
+$("res").addEventListener("change", e=>{ state.res=e.target.value; ensureData(); });
+
+function setMode(m){ state.mode=m;
+  $("mode-pan").setAttribute("aria-pressed", m==="pan");
+  $("mode-box").setAttribute("aria-pressed", m==="box");
+  mapNode.style.cursor = m==="box" ? "crosshair" : "grab";
+}
+$("mode-pan").addEventListener("click",()=>setMode("pan"));
+$("mode-box").addEventListener("click",()=>setMode("box"));
+
+$("borders").addEventListener("change", e=>{ state.showBorders=e.target.checked; render(); });
+$("graticule").addEventListener("change", e=>{ state.showGraticule=e.target.checked; render(); });
+$("grat-step").addEventListener("input", e=>{
+  const v=parseFloat(e.target.value);
+  state.graticuleStep = (isFinite(v)&&v>0) ? Math.min(90,v) : 30;
+  if(state.showGraticule) render();
+});
+$("plot-aspect").addEventListener("change", e=>{
+  state.plotAspect = parseFloat(e.target.value)||0; state.scale=null; render();
+});
+$("plot-size").addEventListener("input", e=>{
+  state.plotSize = parseFloat(e.target.value)||1;
+  $("plot-size-val").textContent = Math.round(state.plotSize*100)+"%";
+  state.scale=null; render();
+});
+
+const colorMap={ "c-ocean":"ocean","c-land":"land","c-coast":"coast","c-border":"border","c-grat":"grat" };
+Object.keys(colorMap).forEach(id=>{
+  $(id).addEventListener("input", e=>{ state.color[colorMap[id]]=e.target.value; render(); });
+});
+
+// Commit on button click, on Enter, or when focus leaves the bounds group
+// (clicking the map, another control, etc). Tabbing *between* the four fields
+// keeps focus inside the group, so it does not fire a partial apply.
+$("apply-bounds").addEventListener("click", applyBoundsFromFields);
+(function(){
+  const bg=document.querySelector(".bounds-grid");
+  bg.addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); applyBoundsFromFields(); }});
+  bg.addEventListener("focusout", e=>{ if(!bg.contains(e.relatedTarget)) applyBoundsFromFields(); });
+})();
+$("clear-bounds").addEventListener("click", resetBounds);  // reset only the lon/lat bounds
+$("reset").addEventListener("click", resetView);           // reset layers, colours, bounds, view
+
+/* ---------- export ---------- */
+// Export crops to the plot area, so a chosen aspect / size yields clean figure
+// dimensions instead of the whole (arbitrary) window.
+function serializeSVG(){
+  const r = plotRect();
+  const clone = mapNode.cloneNode(true);
+  clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  clone.setAttribute("width", Math.round(r.w)); clone.setAttribute("height", Math.round(r.h));
+  clone.setAttribute("viewBox", `${r.x} ${r.y} ${r.w} ${r.h}`);
+  // white background card behind the plot area
+  const bg = document.createElementNS("http://www.w3.org/2000/svg","rect");
+  bg.setAttribute("x",r.x); bg.setAttribute("y",r.y); bg.setAttribute("width",r.w); bg.setAttribute("height",r.h);
+  bg.setAttribute("fill","#ffffff");
+  clone.insertBefore(bg, clone.firstChild);
+  const rub = clone.querySelector(".rubber"); if(rub) rub.remove();
+  return new XMLSerializer().serializeToString(clone);
+}
+function download(blob, name){ const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+
+$("dl-svg").addEventListener("click", ()=>{
+  download(new Blob([serializeSVG()],{type:"image/svg+xml"}), `geoplot-${state.type}.svg`);
+});
+$("dl-png").addEventListener("click", ()=>{
+  const scale=+$("png-scale").value;
+  const r=plotRect();
+  const svgStr=serializeSVG();
+  const img=new Image();
+  img.onload=()=>{
+    const c=document.createElement("canvas"); c.width=Math.round(r.w*scale); c.height=Math.round(r.h*scale);
+    const ctx=c.getContext("2d"); ctx.drawImage(img,0,0,c.width,c.height);
+    c.toBlob(b=>download(b,`geoplot-${state.type}@${scale}x.png`),"image/png");
+  };
+  img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svgStr);
+});
+
+/* ============================================================================
+   SIZING + BOOT
+   ========================================================================== */
+function resize(){
+  const r = document.getElementById("wrap").getBoundingClientRect();
+  W = Math.max(200,Math.round(r.width));
+  H = Math.max(200,Math.round(r.height));
+  svg.attr("viewBox",`0 0 ${W} ${H}`).attr("width",W).attr("height",H);
+  state.scale=null;   // re-fit the current window/globe to the new plot area
+  render();
+}
+new ResizeObserver(()=>resize()).observe(document.getElementById("wrap"));
+
+// initial geometry, then data
+(function init(){
+  const r=document.getElementById("wrap").getBoundingClientRect();
+  W=Math.round(r.width)||800; H=Math.round(r.height)||600;
+  svg.attr("viewBox",`0 0 ${W} ${H}`).attr("width",W).attr("height",H);
+  render();        // draws frame/ocean immediately
+  setBoundsFields(DEFAULT_BOUNDS);   // show the default bounds in the boxes
+  ensureData();    // fills land/borders when fetched
+})();
+</script>
+</body>
+</html>
