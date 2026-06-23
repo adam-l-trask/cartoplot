@@ -16,16 +16,16 @@
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   *{box-sizing:border-box}
-  html,body{height:100%;margin:0}
+  html,body{height:100%;margin:0;overflow:clip}
   body{
     background:var(--paper); color:var(--ink); font-family:var(--sans);
-    font-size:13px; line-height:1.45; display:flex; height:100vh; overflow:hidden;
+    font-size:13px; line-height:1.45; display:flex; height:100vh; overflow:clip;
   }
   svg{overflow:hidden}
 
   /* ---------- control rail ---------- */
   .rail{
-    width:268px; flex:0 0 268px; height:100%; overflow-y:auto;
+    width:268px; flex:0 0 268px; height:100vh; min-height:0; overflow-y:auto; overscroll-behavior:contain;
     background:var(--panel); border-right:1px solid var(--hair);
     padding:18px 18px 28px;
   }
@@ -62,13 +62,13 @@
   .seg button[aria-pressed=true]{background:var(--accent);color:#fff}
 
   /* toggle row */
-  .toggle{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;cursor:pointer}
+  .toggle{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;cursor:pointer;position:relative}
   .toggle span{font-size:12.5px}
   .switch{position:relative;width:34px;height:19px;flex:0 0 34px;
     background:var(--hair-strong);border-radius:999px;transition:background .15s}
   .switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;
     background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px #0003}
-  .toggle input{position:absolute;opacity:0}
+  .toggle input{position:absolute;opacity:0;margin:0;top:0;right:0;width:34px;height:100%}
   .toggle input:checked + .switch{background:var(--accent)}
   .toggle input:checked + .switch::after{transform:translateX(15px)}
   .toggle input:focus-visible + .switch{outline:2px solid var(--accent-weak);outline-offset:2px}
@@ -82,6 +82,10 @@
   }
   .swatch input[type=color]::-webkit-color-swatch-wrapper{padding:0}
   .swatch input[type=color]::-webkit-color-swatch{border:1px solid var(--hair-strong);border-radius:5px}
+  .swatch-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+  .swatch-grid .swatch{margin-bottom:0;display:grid;grid-template-columns:60px auto;align-items:center;gap:8px;justify-content:start}
+  .swatch-grid .swatch label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .swatch-grid .swatch input[type=color]{flex:none}
 
   .bounds-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
   .hint-text{font-size:11px;color:var(--muted);margin:0 0 10px;line-height:1.4}
@@ -136,7 +140,7 @@
   button.btn:focus-visible{outline:2px solid var(--accent-weak);outline-offset:1px}
 
   /* ---------- stage ---------- */
-  .stage{flex:1;display:flex;flex-direction:column;min-width:0}
+  .stage{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 
   /* top bar: figure layout + export, right-aligned */
   .topbar{flex:0 0 auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -152,7 +156,9 @@
   .topbar input[type=range]{width:92px;margin:0}
   .topbar button.btn{flex:0 0 auto;padding:6px 12px}
   .topbar #plot-size-val{font-family:var(--mono);font-size:11px;color:var(--ink);min-width:34px}
-  .canvas-wrap{flex:1;position:relative;min-height:0;background:
+  .topbar .seg{flex:0 0 auto}
+  .topbar .seg button{padding:6px 11px}
+  .canvas-wrap{flex:1;position:relative;min-height:0;overflow:hidden;background:
     /* faint paper grid, very quiet */
     linear-gradient(#00000003 1px,transparent 1px) 0 0/22px 22px,
     linear-gradient(90deg,#00000003 1px,transparent 1px) 0 0/22px 22px,
@@ -195,16 +201,7 @@
     <p class="tagline">A lightweight cartographic plotter. Drag to roam, box to zoom, export for print.</p>
 
     <div class="group">
-      <p class="eyebrow">Projection</p>
-      <label class="field">
-        <span>Map projection</span>
-        <select id="proj">
-          <option value="equirectangular" selected>Equirectangular</option>
-          <option value="mercator">Mercator</option>
-          <option value="naturalEarth">Natural Earth</option>
-          <option value="orthographic">Orthographic (globe)</option>
-        </select>
-      </label>
+      <p class="eyebrow">Basemap</p>
       <label class="field">
         <span>Vector resolution</span>
         <select id="res">
@@ -212,28 +209,6 @@
           <option value="50m">50m — detailed</option>
         </select>
       </label>
-    </div>
-
-    <div class="group">
-      <p class="eyebrow">Interaction</p>
-      <div class="seg" role="group" aria-label="Pointer mode">
-        <button id="mode-pan" aria-pressed="true">Pan</button>
-        <button id="mode-box" aria-pressed="false">Box zoom</button>
-      </div>
-    </div>
-
-    <div class="group">
-      <p class="eyebrow">Trajectories</p>
-      <div class="row" style="margin-bottom:8px">
-        <button class="btn" id="load-file">Load file…</button>
-      </div>
-      <p class="hint-text">Drop a <b>.json</b> / <b>.geojson</b> onto the map, or embed from Python. Coordinates are <b>[lon, lat]</b>.</p>
-      <div id="layer-list"></div>
-      <label class="toggle" style="margin-top:8px"><span>Legend</span>
-        <input type="checkbox" id="legend-toggle"><i class="switch"></i></label>
-      <label class="toggle"><span>Vertex markers</span>
-        <input type="checkbox" id="markers-toggle"><i class="switch"></i></label>
-      <input type="file" id="file-input" accept=".json,.geojson,application/json" style="display:none">
     </div>
 
     <div class="group">
@@ -248,11 +223,13 @@
 
     <div class="group">
       <p class="eyebrow">Style</p>
-      <div class="swatch"><label for="c-ocean">Ocean</label><input type="color" id="c-ocean" value="#e8eef2"></div>
-      <div class="swatch"><label for="c-land">Land</label><input type="color" id="c-land" value="#f1ece2"></div>
-      <div class="swatch"><label for="c-coast">Coastline</label><input type="color" id="c-coast" value="#6f6a60"></div>
-      <div class="swatch"><label for="c-border">Borders</label><input type="color" id="c-border" value="#b7afa1"></div>
-      <div class="swatch"><label for="c-grat">Graticule</label><input type="color" id="c-grat" value="#9a958a"></div>
+      <div class="swatch-grid">
+        <div class="swatch"><label for="c-ocean">Ocean</label><input type="color" id="c-ocean" value="#e8eef2"></div>
+        <div class="swatch"><label for="c-land">Land</label><input type="color" id="c-land" value="#f1ece2"></div>
+        <div class="swatch"><label for="c-coast">Coastline</label><input type="color" id="c-coast" value="#6f6a60"></div>
+        <div class="swatch"><label for="c-border">Borders</label><input type="color" id="c-border" value="#b7afa1"></div>
+        <div class="swatch"><label for="c-grat">Graticule</label><input type="color" id="c-grat" value="#9a958a"></div>
+      </div>
     </div>
 
     <div class="group">
@@ -269,11 +246,38 @@
         <button class="btn" id="clear-bounds">Reset Bounds</button>
       </div>
     </div>
+
+    <div class="group">
+      <p class="eyebrow">Trajectories</p>
+      <div class="row" style="margin-bottom:8px">
+        <button class="btn" id="load-file">Load file…</button>
+      </div>
+      <p class="hint-text">Drop a <b>.json</b> / <b>.geojson</b> onto the map, or embed from Python. Coordinates are <b>[lon, lat]</b>.</p>
+      <label class="toggle"><span>Legend</span>
+        <input type="checkbox" id="legend-toggle"><i class="switch"></i></label>
+      <label class="toggle" style="margin-bottom:8px"><span>Vertex markers</span>
+        <input type="checkbox" id="markers-toggle"><i class="switch"></i></label>
+      <div id="layer-list"></div>
+      <input type="file" id="file-input" accept=".json,.geojson,application/json" style="display:none">
+    </div>
   </aside>
 
   <main class="stage">
     <div class="topbar">
-      <span class="tb-label">Layout &amp; export</span>
+      <div class="tb-group">
+        <label class="inline">Projection
+          <select id="proj">
+            <option value="equirectangular" selected>Equirectangular</option>
+            <option value="mercator">Mercator</option>
+            <option value="naturalEarth">Natural Earth</option>
+            <option value="orthographic">Orthographic (globe)</option>
+          </select>
+        </label>
+        <div class="seg" role="group" aria-label="Pointer mode">
+          <button id="mode-pan" aria-pressed="true">Pan</button>
+          <button id="mode-box" aria-pressed="false">Box zoom</button>
+        </div>
+      </div>
       <span class="tb-spacer"></span>
       <div class="tb-group">
         <label class="inline">Aspect
@@ -459,19 +463,28 @@ function plotRect(){
   // The MAP box. When a legend is shown we reserve its width on the right and
   // keep the (map + legend) group centred, so the map keeps its aspect ratio and
   // simply shrinks to make room rather than being drawn over.
-  const a=state.plotAspect, s=state.plotSize, lw=legendWidth();
-  const availW=Math.max(40, W*s - lw), availH=H*s;
+  const a=state.plotAspect, s=state.plotSize;
+  // Reserve legend width, but never let it crowd the map below a usable minimum.
+  // A very wide legend on a narrow window would otherwise collapse the plot area
+  // to near-zero and yield a degenerate fit the view can't recover from.
+  const lw=Math.min(legendWidth(), Math.max(0, W*s - 140));
+  const availW=Math.max(140, W*s - lw), availH=H*s;
   let w,h;
   if(!a){ w=availW; h=availH; }
   else { if(availW/availH > a){ h=availH; w=h*a; } else { w=availW; h=w/a; } }
   const groupW = w + lw;
   return { x:(W-groupW)/2, y:(H-h)/2, w, h };
 }
-// Full figure bounds (map + legend strip) — the region exported to SVG/PNG.
+// Full figure bounds (map + legend strip) — used for the complete SVG export.
 function figureRect(){
   const r=plotRect(), m=legendMetrics();
   if(!m) return { x:r.x, y:r.y, w:r.w, h:r.h };
   return { x:r.x, y:r.y, w:r.w + m.gap + m.boxW, h:Math.max(r.h, m.boxH) };
+}
+// Visible figure bounds — map height only, legend clipped to it (PNG snapshot).
+function figureRectView(){
+  const r=plotRect();
+  return { x:r.x, y:r.y, w:r.w + legendWidth(), h:r.h };
 }
 
 function fitView(){
@@ -494,8 +507,17 @@ function fitView(){
   const r = plotRect();
   p.fitExtent([[r.x+PAD, r.y+PAD],[r.x+r.w-PAD, r.y+r.h-PAD]], frameGeometry(b));
   state.rotate = p.rotate();
-  state.scale = p.scale();
-  state.translate = p.translate();
+  // Guard: never store a degenerate fit (non-finite or non-positive scale). That
+  // would push the map off-screen permanently, recoverable only by reloading.
+  const sc = p.scale(), tr = p.translate();
+  if(isFinite(sc) && sc > 0 && isFinite(tr[0]) && isFinite(tr[1])){
+    state.scale = sc; state.translate = tr;
+  } else {
+    const fb = meta.make();
+    fb.rotate(meta.azimuthal ? state.rotate : [state.rotate[0], 0, 0]);
+    fb.fitExtent([[r.x+PAD, r.y+PAD],[r.x+r.w-PAD, r.y+r.h-PAD]], {type:"Sphere"});
+    state.scale = fb.scale(); state.translate = fb.translate();
+  }
 }
 
 /* ============================================================================
@@ -677,6 +699,20 @@ function trajPath(proj){
     .precision(0);
   return d3.geoPath(tp);
 }
+// d3-geo fills the region enclosed by a *clockwise* ring (for sub-hemisphere
+// polygons); a counter-clockwise ring fills the complement — the "fills the
+// outside" bug. Rather than guess from area, each polygon declares its `winding`
+// and we orient the ring for d3 accordingly: a "cw" ring is passed through, a
+// "ccw" ring is reversed, so the region the ring encloses is what fills. Declare
+// the winding your vertices are actually in. (Standard GeoJSON exterior rings
+// are counter-clockwise — hence "ccw" is the default elsewhere.)
+function polygonGeom(ring, winding){
+  let coords = ring;
+  const a = coords[0], b = coords[coords.length-1];
+  if(!(a && b && a[0]===b[0] && a[1]===b[1])) coords = coords.concat([a]);   // close it
+  if(winding==="ccw") coords = coords.slice().reverse();
+  return {type:"Polygon", coordinates:[coords]};
+}
 function renderTrajectories(proj){
   const tpath = trajPath(proj);
   const sel = gTraj.selectAll("g.layer").data(state.layers.filter(L=>L.style.visible), L=>L.id);
@@ -688,7 +724,7 @@ function renderTrajectories(proj){
   all.each(function(L){
     const g = d3.select(this);
     const geom = L.type==="polygon"
-      ? {type:"Polygon", coordinates:[L.coordinates]}
+      ? polygonGeom(L.coordinates, L.winding)
       : {type:"LineString", coordinates:L.coordinates};
     g.select("path.line")
       .attr("d", tpath(geom))
@@ -738,23 +774,54 @@ function renderLegend(){
 
 // Full, top-aligned SVG legend — drawn into gLegend transiently for SVG/PNG
 // export (a static figure has no scroll, so it shows every entry).
-function drawSvgLegend(){
+function drawSvgLegend(mode){            // mode: "full" (svg) | "view" (png snapshot)
   gLegend.selectAll("*").remove();
   const m = legendMetrics();
   if(!m) return;
   const r = plotRect();
   const x = r.x + r.w + m.gap, y = r.y;
-  const g = gLegend.attr("transform",`translate(${x},${y})`);
-  g.append("rect").attr("width",m.boxW).attr("height",m.boxH)
-   .attr("rx",6).attr("fill","#ffffff").attr("stroke","#e7e4dc");
+  const view = mode === "view";
+  const contentH = m.boxH;
+  const visibleH = view ? Math.min(contentH, r.h) : contentH;
+
+  // In "view" mode the PNG should mirror the screen, so take the scroll position
+  // straight from the live HTML legend overlay.
+  let offset = 0, scrollable = false;
+  if(view){
+    const box = document.getElementById("legend-box");
+    const denom = box.scrollHeight - box.clientHeight;
+    const frac = denom > 1 ? box.scrollTop / denom : 0;
+    const maxOff = Math.max(0, contentH - visibleH);
+    offset = frac * maxOff;
+    scrollable = maxOff > 0.5;
+  }
+
+  const g = gLegend.attr("transform", `translate(${x},${y})`);
+  g.append("rect").attr("width", m.boxW).attr("height", visibleH)
+   .attr("rx", 6).attr("fill", "#ffffff").attr("stroke", "#e7e4dc");
+
+  // clip the (possibly scrolled) item list to the visible card
+  g.append("defs").append("clipPath").attr("id", "lg-clip")
+   .append("rect").attr("width", m.boxW).attr("height", visibleH);
+  const items = g.append("g").attr("clip-path", "url(#lg-clip)")
+                 .append("g").attr("transform", `translate(0,${-offset})`);
   m.items.forEach((L,i)=>{
     const yy = m.pad + i*m.lh + 8;
-    g.append("line").attr("x1",m.pad).attr("y1",yy).attr("x2",m.pad+m.sw).attr("y2",yy)
+    items.append("line").attr("x1",m.pad).attr("y1",yy).attr("x2",m.pad+m.sw).attr("y2",yy)
      .attr("stroke",L.style.color).attr("stroke-width", Math.max(2,L.style.width));
-    g.append("text").attr("x",m.pad+m.sw+m.textGap).attr("y",yy+3.5)
+    items.append("text").attr("x",m.pad+m.sw+m.textGap).attr("y",yy+3.5)
      .attr("font-family","ui-sans-serif,system-ui").attr("font-size",11).attr("fill","#20201d")
      .text(L.name);
   });
+
+  // scrollbar thumb, so a clipped PNG makes it obvious the legend is scrolled
+  if(scrollable){
+    const sbW = 4, padR = 2;
+    const thumbH = Math.max(16, visibleH * (visibleH / contentH));
+    const thumbY = (visibleH - thumbH) * (offset / Math.max(1, contentH - visibleH));
+    g.append("rect").attr("x", m.boxW - sbW - padR).attr("y", thumbY)
+     .attr("width", sbW).attr("height", thumbH).attr("rx", 2).attr("fill", "#cfcabf");
+  }
 }
 
 /* ---- loading layers (embedded block, file drop, or paste) ---- */
@@ -765,6 +832,7 @@ function normalizeLayer(raw, idx){
     id: "L"+(layerSeq++),
     name: raw.name || raw.title || ("layer "+(idx+1)),
     type: raw.type==="polygon" ? "polygon" : "path",
+    winding: raw.winding==="cw" ? "cw" : "ccw",   // polygon ring winding (cw|ccw)
     coordinates: raw.coordinates || raw.coords || [],
     data: raw.data || null,                              // columnar per-point fields
     style: {
@@ -847,6 +915,7 @@ function serializeLayers(){
       style:{ color:L.style.color, width:L.style.width, opacity:L.style.opacity,
               markers:L.style.markers, markerSize:L.style.markerSize, visible:L.style.visible } };
     if(L.style.fillOpacity!=null) o.style.fillOpacity=L.style.fillOpacity;
+    if(L.type==="polygon") o.winding=L.winding;
     if(L.data) o.data=L.data;
     return o;
   });
@@ -1270,9 +1339,11 @@ $("reset").addEventListener("click", resetView);           // reset layers, colo
 /* ---------- export ---------- */
 // Export crops to the plot area, so a chosen aspect / size yields clean figure
 // dimensions instead of the whole (arbitrary) window.
-function serializeSVG(){
-  const r = figureRect();
-  drawSvgLegend();                       // full legend into the SVG, just for this clone
+function serializeSVG(mode){
+  // mode "full" -> complete figure (SVG); "view" -> on-screen snapshot (PNG),
+  // legend clipped to the map height at its current scroll position.
+  const r = mode==="view" ? figureRectView() : figureRect();
+  drawSvgLegend(mode);
   const clone = mapNode.cloneNode(true);
   gLegend.selectAll("*").remove();       // screen uses the HTML overlay; keep SVG empty
   clone.setAttribute("xmlns","http://www.w3.org/2000/svg");
@@ -1290,12 +1361,12 @@ function download(blob, name){ const a=document.createElement("a");
   a.href=URL.createObjectURL(blob); a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
 
 $("dl-svg").addEventListener("click", ()=>{
-  download(new Blob([serializeSVG()],{type:"image/svg+xml"}), `cartoplot-${state.type}.svg`);
+  download(new Blob([serializeSVG("full")],{type:"image/svg+xml"}), `cartoplot-${state.type}.svg`);
 });
 $("dl-png").addEventListener("click", ()=>{
   const scale=+$("png-scale").value;
-  const r=figureRect();
-  const svgStr=serializeSVG();
+  const r=figureRectView();
+  const svgStr=serializeSVG("view");
   const img=new Image();
   img.onload=()=>{
     const c=document.createElement("canvas"); c.width=Math.round(r.w*scale); c.height=Math.round(r.h*scale);
@@ -1311,8 +1382,10 @@ $("save-html").addEventListener("click", saveHtml);
    ========================================================================== */
 function resize(){
   const r = document.getElementById("wrap").getBoundingClientRect();
-  W = Math.max(200,Math.round(r.width));
-  H = Math.max(200,Math.round(r.height));
+  const nw = Math.max(200,Math.round(r.width));
+  const nh = Math.max(200,Math.round(r.height));
+  if(nw===W && nh===H) return;   // size unchanged — skip to avoid ResizeObserver feedback loops
+  W = nw; H = nh;
   svg.attr("viewBox",`0 0 ${W} ${H}`).attr("width",W).attr("height",H);
   state.scale=null;   // re-fit the current window/globe to the new plot area
   render();

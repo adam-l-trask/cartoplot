@@ -31,6 +31,9 @@ added later without breaking existing files):
         { "type": "path",                      # "path" (line) or "polygon" (filled)
           "name": "Flight 123",
           "coordinates": [[lon, lat], ...],    # NOTE: [lon, lat] order
+          "winding": "ccw",                    # polygons only: "ccw" (default) |
+                                               # "cw" — declares your vertex order
+                                               # so d3 fills the enclosed region
           "style": {"color": "#c1572e", "width": 1.6, "opacity": 1,
                     "markers": false, "fillOpacity": 0.25},
           "data": {"time": [...], "altitude": [...]} }   # columnar, parallel to coords
@@ -77,6 +80,33 @@ def path_layer(lons, lats, name=None, color=None, width=None, opacity=None,
             data[key] = values
         layer["data"] = data
 
+    return layer
+
+
+def polygon_layer(lons, lats, name=None, color=None, width=None, opacity=None,
+                  fill_opacity=None, markers=False, winding="ccw", **point_fields):
+    """Build a filled polygon layer from a ring of lon/lat vertices.
+
+    Like path_layer, but the layer is type "polygon" and its interior is filled.
+    `fill_opacity` (0..1) controls the fill alpha. Extra keyword arrays become
+    per-vertex tooltip data.
+
+    `winding` ("ccw" default, or "cw") declares the order of your vertices.
+    Cartoplot orients the ring for d3-geo accordingly so the region your ring
+    *encloses* is the one that fills — a "cw" ring is used as-is, a "ccw" ring is
+    reversed internally. Declare the winding your vertices are actually in; "ccw"
+    is the default because that matches standard GeoJSON exterior rings. (If you
+    ever want the complementary region filled instead — e.g. an area larger than
+    a hemisphere — declare the opposite of your true winding.)
+    """
+    if winding not in ("cw", "ccw"):
+        raise ValueError("winding must be 'cw' or 'ccw'")
+    layer = path_layer(lons, lats, name=name, color=color, width=width,
+                       opacity=opacity, markers=markers, polygon=True,
+                       **point_fields)
+    layer["winding"] = winding
+    if fill_opacity is not None:
+        layer.setdefault("style", {})["fillOpacity"] = fill_opacity
     return layer
 
 

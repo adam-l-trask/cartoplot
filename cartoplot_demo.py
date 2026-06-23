@@ -23,7 +23,7 @@ import sys
 
 # Make sure we can import the sibling helper regardless of the working directory.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cartoplot_embed import path_layer, embed
+from cartoplot_embed import path_layer, polygon_layer, embed
 
 
 # --- airports: name -> (lon, lat) ------------------------------------------
@@ -172,15 +172,16 @@ def build_layers():
             elapsed_min=elapsed, alt_ft=alt, speed_kt=spd,
         ))
 
-    # One filled polygon (built as a raw layer dict to show the schema directly):
-    # a rough "North Atlantic watch area".
-    layers.append({
-        "type": "polygon",
-        "name": "N. Atlantic watch area",
-        "coordinates": [[-45, 40], [-15, 45], [-10, 60], [-50, 58], [-45, 40]],
-        "style": {"color": "#37506b", "width": 1.2,
-                  "opacity": 0.9, "fillOpacity": 0.12},
-    })
+    # One filled polygon, via the dedicated polygon_layer helper. These vertices
+    # are wound counter-clockwise, which we declare so Cartoplot orders the ring
+    # for d3 and fills the enclosed area (not the rest of the globe).
+    ring = [(-45, 40), (-15, 45), (-10, 60), (-50, 58)]
+    layers.append(polygon_layer(
+        [p[0] for p in ring], [p[1] for p in ring],
+        name="N. Atlantic watch area",
+        color="#37506b", width=1.2, opacity=0.9, fill_opacity=0.12,
+        winding="ccw",
+    ))
     return layers
 
 
