@@ -175,7 +175,8 @@ def build_layers():
         styles = ("solid", "dash", "dot", "long-dash", "long-dash-dot")
         layers.append(path_layer(
             [c[0] for c in coords], [c[1] for c in coords],
-            name=f"{origin} \u2192 {dest}",
+            # name=f"{origin} \u2192 {dest}",
+            name=f"Phase_{i}",
             color=color, width=1.5, line_style=styles[i % len(styles)],
             elapsed_min=elapsed, alt_ft=alt, speed_kt=spd,
         ))
@@ -184,12 +185,12 @@ def build_layers():
     # are wound counter-clockwise, which we declare so Cartoplot orders the ring
     # for d3 and fills the enclosed area (not the rest of the globe).
     ring = [(-45, 40), (-15, 45), (-10, 60), (-50, 58)]
-    layers.append(polygon_layer(
-        [p[0] for p in ring], [p[1] for p in ring],
-        name="N. Atlantic watch area",
-        color="#37506b", width=1.2, opacity=0.9, fill_opacity=0.12,
-        winding="ccw",
-    ))
+    # layers.append(polygon_layer(
+    #     [p[0] for p in ring], [p[1] for p in ring],
+    #     name="N. Atlantic watch area",
+    #     color="#37506b", width=1.2, opacity=0.9, fill_opacity=0.12,
+    #     winding="ccw",
+    # ))
     return layers
 
 

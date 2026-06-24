@@ -130,6 +130,7 @@
     background:var(--legend-bg);border:1px solid var(--hair);border-radius:6px;
     padding:6px 0;overflow-y:auto;overflow-x:hidden;backdrop-filter:blur(1px);
     font:11px ui-sans-serif,system-ui;color:var(--ink);
+    scrollbar-width:thin;scrollbar-gutter:stable;
     cursor:move;user-select:none;-webkit-user-select:none}
   .legend-box.dragging{box-shadow:0 4px 14px #0003;border-color:var(--accent)}
   .legend-box .lg-row{display:flex;align-items:center;gap:6px;padding:2px 8px;min-width:0}
@@ -216,7 +217,7 @@
 </head>
 <body>
   <aside class="rail">
-    <div class="brand"><h1>Cartoplot</h1><span class="v">d3 based geo plots</span></div>
+    <div class="brand"><h1>Cartoplot</h1><span class="v">d3 based geographic plots</span></div>
     <p class="tagline">A lightweight cartographic plotter. Drag to roam, box to zoom, export for print.</p>
 
     <div class="group">
@@ -322,9 +323,9 @@
         <button class="btn primary" id="dl-svg">SVG</button>
         <button class="btn" id="dl-png">PNG</button>
         <select id="png-scale">
-          <option value="1" selected>1×</option>
-          <option value="2">2×</option>
+          <option value="2" selected>2×</option>
           <option value="4">4×</option>
+          <option value="1">1×</option>
         </select>
         <span id="png-dims" class="png-dims" title="PNG output size at this scale"></span>
         <div class="tb-sep"></div>
@@ -489,14 +490,38 @@ function currentProjection(){
 // plotRect (which subtracts the strip), renderLegend (which draws in it), and
 // figureRect (which spans both for export).
 function legendItems(){ return state.layers.filter(L=>L.style.visible && L.name); }
+// Measure a string at the legend's actual font, so the box is sized to fit the
+// names exactly. A flat per-character estimate is font-blind: it under-measures
+// capitals, digits and underscores, so even short names like "Phase_0" got
+// clipped. Cached offscreen 2D context; font mirrors the .legend-box CSS.
+let _lgMeasureCtx = null;
+function legendTextWidth(s){
+  if(!_lgMeasureCtx){
+    _lgMeasureCtx = document.createElement("canvas").getContext("2d");
+    _lgMeasureCtx.font = '11px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  }
+  return _lgMeasureCtx.measureText(s).width;
+}
+
 function legendMetrics(){
   const items = legendItems();
   if(!state.showLegend || !items.length) return null;
   const pad=8, sw=22, textGap=6, lh=16, gap=18;
-  const maxChars = items.reduce((m,L)=>Math.max(m, L.name.length), 0);
-  const boxW = pad + sw + textGap + Math.min(170, Math.ceil(maxChars*6.2)) + pad;
+  const chrome = pad + sw + textGap + pad;          // box width that isn't the name text
+  // Fit the widest name exactly, and always reserve the scrollbar gutter: when a
+  // tall legend scrolls, the scrollbar would otherwise eat into the name column
+  // and clip the longest entries (e.g. "Phase_10" while "Phase_9" still fit).
+  const scrollGutter = 12;                          // webkit scrollbar 8px, Firefox "thin" ~12px
+  const slack = 8;                                  // keep the CSS ellipsis from tripping at exact fit
+  const textW = items.reduce((m,L)=>Math.max(m, legendTextWidth(L.name)), 0);
+  // Generous cap (~45% of canvas) only guards against a pathological name; the
+  // map stays usable because plotRect() also caps the reserved strip.
+  const maxBoxW = Math.max(160, Math.floor((W||1000)*0.45));
+  const fit = Math.ceil(chrome + textW + slack);    // tight: fits names with slack, no scrollbar
+  const boxW = Math.min(maxBoxW, fit + scrollGutter); // on-screen: reserve the real scrollbar gutter
+  const exportW = Math.min(maxBoxW, fit);             // SVG/PNG: no OS scrollbar, so no gutter
   const boxH = items.length*lh + pad*2 - 4;
-  return { items, pad, sw, textGap, lh, gap, boxW, boxH };
+  return { items, pad, sw, textGap, lh, gap, boxW, exportW, boxH };
 }
 function legendWidth(){ const m=legendMetrics(); return m ? m.gap + m.boxW : 0; }
 
@@ -521,7 +546,9 @@ function legendSide(){
 function legendBox(mode){
   const m = legendMetrics(); if(!m) return null;
   const [mapL,mapR] = mapLeftRight(), [mapT,mapB] = mapTopBottom();
-  const mapW = mapR-mapL, mapH = mapB-mapT, w = m.boxW, loc = state.legendLoc;
+  const mapW = mapR-mapL, mapH = mapB-mapT, loc = state.legendLoc;
+  // Export modes have no OS scrollbar, so they use the tighter width (no gutter).
+  const w = (mode==="full" || mode==="view") ? m.exportW : m.boxW;
   const outside = legendIsOutside(loc);
   const custom = Array.isArray(loc);
   const avail = (outside || custom) ? mapH : Math.max(40, mapH - 2*LEGEND_INSET);
@@ -540,7 +567,7 @@ function legendBox(mode){
     x = mapL + LEGEND_INSET + f[0]*(mapW - 2*LEGEND_INSET - w);
     y = mapT + LEGEND_INSET + f[1]*(avail - h);
   }
-  return { x, y, w, h, mapL, mapR, mapT, mapB, mapW, mapH };
+  return { x, y, w, h, avail, mapL, mapR, mapT, mapB, mapW, mapH };
 }
 
 function plotRect(){
@@ -903,7 +930,10 @@ function renderLegend(){
   box.style.left = lb.x + "px";
   box.style.top  = lb.y + "px";
   box.style.width = lb.w + "px";
-  box.style.maxHeight = lb.h + "px";
+  // Cap at the plot height and let the real content height decide whether it
+  // scrolls — so the legend grows to fit its entries whenever the map has room,
+  // and only scrolls once the entries genuinely exceed the plot height.
+  box.style.maxHeight = lb.avail + "px";
   box.title = "Drag to move · double-click to reset";
   box.innerHTML = "";
   m.items.forEach(L=>{
@@ -952,12 +982,12 @@ function drawSvgLegend(mode){            // mode: "full" (svg) | "view" (png sna
 
   const th = THEME[state.theme];
   const g = gLegend.attr("transform", `translate(${x},${y})`);
-  g.append("rect").attr("width", m.boxW).attr("height", visibleH)
+  g.append("rect").attr("width", lb.w).attr("height", visibleH)
    .attr("rx", 6).attr("fill", th.legendBg).attr("stroke", th.legendBorder);
 
   // clip the (possibly scrolled) item list to the visible card
   g.append("defs").append("clipPath").attr("id", "lg-clip")
-   .append("rect").attr("width", m.boxW).attr("height", visibleH);
+   .append("rect").attr("width", lb.w).attr("height", visibleH);
   const items = g.append("g").attr("clip-path", "url(#lg-clip)")
                  .append("g").attr("transform", `translate(0,${-offset})`);
   m.items.forEach((L,i)=>{
@@ -977,7 +1007,7 @@ function drawSvgLegend(mode){            // mode: "full" (svg) | "view" (png sna
     const sbW = 4, padR = 2;
     const thumbH = Math.max(16, visibleH * (visibleH / contentH));
     const thumbY = (visibleH - thumbH) * (offset / Math.max(1, contentH - visibleH));
-    g.append("rect").attr("x", m.boxW - sbW - padR).attr("y", thumbY)
+    g.append("rect").attr("x", lb.w - sbW - padR).attr("y", thumbY)
      .attr("width", sbW).attr("height", thumbH).attr("rx", 2).attr("fill", th.legendScroll);
   }
 }
@@ -1172,9 +1202,19 @@ function hideTip(){ const el=document.getElementById("traj-tip"); if(el) el.styl
    otherwise fetched in the user's browser (tries jsDelivr then unpkg).
    ========================================================================== */
 function dataUrls(res){ return [
-  `https://cdn.jsdelivr.net/npm/world-atlas@2/countries-${res}.json`,
-  `https://unpkg.com/world-atlas@2/countries-${res}.json`,
+  `https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-${res}.json`,
+  `https://unpkg.com/world-atlas@2.0.2/countries-${res}.json`,
 ]; }
+
+// Optional Subresource Integrity for the basemap fetch. Leave empty for no check.
+// To enable, paste the sha384 of each pinned file below (same bytes on both
+// mirrors, so one hash per resolution). Compute with:
+//   curl -sL https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-110m.json \
+//     | openssl dgst -sha384 -binary | openssl base64 -A
+// then store it as "sha384-<output>". The browser rejects a non-matching basemap.
+const ATLAS_SRI = { 
+  "110m":"sha384-yOCJ+8ShBm8UDqtAVtAvxTDDf4gXo5edxl/YG0FmVC5OTmqVLl7utuVGBDEeZWHf", 
+  "50m":"sha384-Aw4s9pX1PTPntIYkZ/qV9IYiF5Gv8eTl6Dd/TT56zfO1Wwd+owFwYUuuXNUMrWkc" };
 
 // Atlas TopoJSON inlined at build time (offline=True). null when not embedded.
 function embeddedAtlas(res){
@@ -1189,8 +1229,9 @@ async function loadData(res){
   if(dataCache[res]) return dataCache[res];
   let topo = embeddedAtlas(res);          // offline build: no network needed
   if(!topo){
+    const opts = ATLAS_SRI[res] ? { integrity: ATLAS_SRI[res] } : undefined;
     for(const url of dataUrls(res)){
-      try{ const r=await fetch(url); if(!r.ok) continue; topo=await r.json(); break; }catch(e){}
+      try{ const r=await fetch(url, opts); if(!r.ok) continue; topo=await r.json(); break; }catch(e){}
     }
   }
   if(!topo) throw new Error("Could not load basemap vectors.");
