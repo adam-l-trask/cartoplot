@@ -39,6 +39,8 @@ Layer schema (built for you by the helpers; shown for reference)::
           "data": {"time": [...], "altitude": [...]} }   # columnar, parallel to coords
     ] }
 """
+import base64
+import hashlib
 import json
 import os
 import re
@@ -215,6 +217,162 @@ OFFLINE_ASSETS = {
 
 _LIBS_BLOCK = re.compile(r"<!-- cartoplot:libs.*?-->.*?<!-- /cartoplot:libs -->", re.S)
 
+# Name of the checksum lockfile written inside an assets folder.
+CHECKSUM_FILE = "checksums.json"
+
+# Optional hard pins. If you paste known-good SHA-256 hexes here (keys matching
+# OFFLINE_ASSETS), downloads and offline builds are verified against them — the
+# strongest guarantee. Left empty, integrity falls back to trust-on-first-use:
+# the first download records hashes in CHECKSUM_FILE and later builds must match.
+PINNED_SHA256 = {
+    # "d3": "…", "topojson": "…", "atlas-110m": "…", "atlas-50m": "…",
+}
+
+
+def _sha256_hex(path):
+    """Return the SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sri_hash(path, algo="sha384"):
+    """Return a Subresource Integrity string (e.g. ``"sha384-…"``) for a file."""
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        h.update(f.read())
+    return f"{algo}-{base64.b64encode(h.digest()).decode()}"
+
+
+def _present_assets(assets_dir):
+    """Yield ``(key, filename, path)`` for assets that exist in ``assets_dir``."""
+    for key, (fn, _url) in OFFLINE_ASSETS.items():
+        path = os.path.join(assets_dir, fn)
+        if os.path.exists(path):
+            yield key, fn, path
+
+
+def _write_checksums(assets_dir):
+    """Record SHA-256 of each present asset into ``assets_dir/checksums.json``.
+
+    Args:
+        assets_dir (str): Folder holding the offline assets.
+
+    Returns:
+        dict: The ``{filename: sha256}`` mapping that was written.
+    """
+    sums = {fn: _sha256_hex(path) for _key, fn, path in _present_assets(assets_dir)}
+    with open(os.path.join(assets_dir, CHECKSUM_FILE), "w", encoding="utf-8") as f:
+        json.dump(sums, f, indent=2, sort_keys=True)
+    return sums
+
+
+def verify_offline_assets(assets_dir=ASSET_DIR_DEFAULT):
+    """Check the offline assets against pinned and/or recorded SHA-256 hashes.
+
+    Any hash listed in :data:`PINNED_SHA256` is enforced. Otherwise, if a
+    ``checksums.json`` lockfile is present (written by a prior download), every
+    asset is checked against it. With neither pin nor lockfile there is nothing
+    to verify against and the function is a no-op.
+
+    Args:
+        assets_dir (str): Folder holding the offline assets. Defaults to
+            :data:`ASSET_DIR_DEFAULT`.
+
+    Returns:
+        bool: True if all available checks passed (or there was nothing to check).
+
+    Raises:
+        ValueError: If any asset's hash does not match its expected value.
+    """
+    lock_path = os.path.join(assets_dir, CHECKSUM_FILE)
+    recorded = {}
+    if os.path.exists(lock_path):
+        with open(lock_path, encoding="utf-8") as f:
+            recorded = json.load(f)
+    for key, fn, path in _present_assets(assets_dir):
+        actual = _sha256_hex(path)
+        pinned = PINNED_SHA256.get(key)
+        if pinned and actual != pinned:
+            raise ValueError(f"Integrity check failed for {fn}: does not match the "
+                             f"pinned hash in PINNED_SHA256.")
+        if fn in recorded and actual != recorded[fn]:
+            raise ValueError(f"Integrity check failed for {fn}: does not match "
+                             f"{CHECKSUM_FILE}. The file changed since it was recorded — "
+                             f"re-download with overwrite=True if this is expected.")
+    return True
+
+
+def _ensure_verified(assets_dir):
+    """Verify assets if a lockfile/pins exist; otherwise record a baseline (TOFU)."""
+    if PINNED_SHA256 or os.path.exists(os.path.join(assets_dir, CHECKSUM_FILE)):
+        verify_offline_assets(assets_dir)
+    else:
+        _write_checksums(assets_dir)
+
+
+def cdn_sri(assets_dir=ASSET_DIR_DEFAULT):
+    """Compute Subresource Integrity hashes for the CDN library tags.
+
+    The offline ``d3.min.js`` and ``topojson.min.js`` are byte-for-byte the files
+    the CDN serves, so their hashes are valid ``integrity`` values for the
+    template's ``<script src>`` tags. Run after :func:`download_offline_assets`.
+
+    Args:
+        assets_dir (str): Folder holding the downloaded library assets. Defaults
+            to :data:`ASSET_DIR_DEFAULT`.
+
+    Returns:
+        dict: ``{"d3": "sha384-…", "topojson": "sha384-…"}``.
+
+    Raises:
+        FileNotFoundError: If a library asset is missing.
+    """
+    return {key: _sri_hash(_read_asset_path(assets_dir, OFFLINE_ASSETS[key][0]))
+            for key in ("d3", "topojson")}
+
+
+def apply_cdn_sri(template_path, assets_dir=ASSET_DIR_DEFAULT, out_path=None):
+    """Add ``integrity`` + ``crossorigin`` to the template's CDN ``<script>`` tags.
+
+    Hardens an online figure against a tampered or compromised CDN: the browser
+    refuses to run a library whose hash does not match. Hashes are computed from
+    the downloaded assets (see :func:`cdn_sri`), so no value is hardcoded. Offline
+    builds are unaffected — they inline the libraries and drop these attributes.
+
+    Args:
+        template_path (str): Path to a Cartoplot HTML template.
+        assets_dir (str): Folder holding the downloaded library assets. Defaults
+            to :data:`ASSET_DIR_DEFAULT`.
+        out_path (str, optional): Where to write the result. If omitted, the
+            template is updated in place.
+
+    Returns:
+        str: The path written.
+
+    Raises:
+        FileNotFoundError: If a library asset is missing.
+        ValueError: If a CDN ``<script>`` tag for d3 or topojson is not found.
+    """
+    sri = cdn_sri(assets_dir)
+    with open(template_path, encoding="utf-8") as f:
+        html = f.read()
+    for key in ("d3", "topojson"):
+        url = OFFLINE_ASSETS[key][1]
+        # Match the tag by its src, dropping any existing integrity/crossorigin.
+        pat = re.compile(r'<script src="' + re.escape(url) + r'"[^>]*></script>')
+        if not pat.search(html):
+            raise ValueError(f"CDN <script> tag for {key} not found in template.")
+        tag = (f'<script src="{url}" integrity="{sri[key]}" '
+               f'crossorigin="anonymous" referrerpolicy="no-referrer"></script>')
+        html = pat.sub(lambda m: tag, html, count=1)
+    out_path = out_path or template_path
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(html)
+    return out_path
+
 
 def download_offline_assets(dest_dir=ASSET_DIR_DEFAULT, overwrite=False):
     """Download the offline assets so figures can be fully self-contained.
@@ -223,6 +381,10 @@ def download_offline_assets(dest_dir=ASSET_DIR_DEFAULT, overwrite=False):
     :data:`OFFLINE_ASSETS`) into ``dest_dir`` so that ``embed(..., offline=True)``
     needs no network. Run this once on a machine with internet; the files may
     also be placed in ``dest_dir`` by hand.
+
+    After downloading, any hashes pinned in :data:`PINNED_SHA256` are enforced
+    and a ``checksums.json`` lockfile is written, so later offline builds can
+    detect a changed or tampered asset (see :func:`verify_offline_assets`).
 
     Args:
         dest_dir (str): Folder to populate, created if missing. Defaults to
@@ -234,6 +396,8 @@ def download_offline_assets(dest_dir=ASSET_DIR_DEFAULT, overwrite=False):
 
     Raises:
         urllib.error.URLError: If a download fails (for example, no internet).
+        ValueError: If a downloaded asset does not match a pin in
+            :data:`PINNED_SHA256`.
     """
     os.makedirs(dest_dir, exist_ok=True)
     for _name, (fn, url) in OFFLINE_ASSETS.items():
@@ -245,7 +409,34 @@ def download_offline_assets(dest_dir=ASSET_DIR_DEFAULT, overwrite=False):
             data = r.read()
         with open(dest, "wb") as f:
             f.write(data)
+    # Enforce any hard pins, then record a baseline lockfile so later builds can
+    # detect tampering (trust-on-first-use).
+    if PINNED_SHA256:
+        verify_offline_assets(dest_dir)
+    _write_checksums(dest_dir)
     return dest_dir
+
+
+def _read_asset_path(assets_dir, filename):
+    """Return the path to an offline asset, raising if it is missing.
+
+    Args:
+        assets_dir (str): Folder holding the offline assets.
+        filename (str): Asset file name within ``assets_dir``.
+
+    Returns:
+        str: The full path to the asset.
+
+    Raises:
+        FileNotFoundError: If the asset is absent, with guidance on obtaining it.
+    """
+    path = os.path.join(assets_dir, filename)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"Offline asset missing: {path}\n"
+            f"Run download_offline_assets({assets_dir!r}) on a machine with internet, "
+            f"or place the file there yourself (see OFFLINE_ASSETS for the source URL).")
+    return path
 
 
 def _read_asset(assets_dir, filename):
@@ -261,13 +452,7 @@ def _read_asset(assets_dir, filename):
     Raises:
         FileNotFoundError: If the asset is absent, with guidance on obtaining it.
     """
-    path = os.path.join(assets_dir, filename)
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Offline asset missing: {path}\n"
-            f"Run download_offline_assets({assets_dir!r}) on a machine with internet, "
-            f"or place the file there yourself (see OFFLINE_ASSETS for the source URL).")
-    with open(path, encoding="utf-8") as f:
+    with open(_read_asset_path(assets_dir, filename), encoding="utf-8") as f:
         return f.read()
 
 
@@ -353,7 +538,10 @@ def embed(template_path, layers, out_path=None, config=None,
         offline (bool or str): Make the output fully self-contained (no network at
             view time) by inlining d3 + topojson and embedding the atlas vectors.
             ``True`` uses ``assets_dir``; a path string uses that folder instead.
-            Populate the folder once with :func:`download_offline_assets`.
+            Populate the folder once with :func:`download_offline_assets`. Before
+            inlining, the assets are integrity-checked against
+            :data:`PINNED_SHA256` and/or the folder's ``checksums.json`` lockfile
+            (recording a baseline on first use); a mismatch raises.
         assets_dir (str): Folder of offline assets, used when ``offline`` is set.
             Defaults to :data:`ASSET_DIR_DEFAULT`.
 
@@ -361,7 +549,8 @@ def embed(template_path, layers, out_path=None, config=None,
         str: The path written (``out_path``, or ``template_path`` if overwritten).
 
     Raises:
-        ValueError: If the template lacks the ``cartoplot-data`` block.
+        ValueError: If the template lacks the ``cartoplot-data`` block, or an
+            offline asset fails its integrity check.
         FileNotFoundError: If ``offline`` is requested but an asset is missing.
     """
     with open(template_path, encoding="utf-8") as f:
@@ -378,6 +567,7 @@ def embed(template_path, layers, out_path=None, config=None,
 
     if offline:
         adir = offline if isinstance(offline, str) else assets_dir
+        _ensure_verified(adir)          # pin/lockfile integrity check (or record baseline)
         html = _inline_libraries(html, adir)
         html = _embed_atlas(html, adir)
 
