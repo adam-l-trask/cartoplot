@@ -15,6 +15,7 @@
     --accent:#c1572e;            /* survey orange — used only for active states + selection */
     --accent-weak:#c1572e22;
     --legend-bg:#ffffffea; --grid-line:#00000003;
+    --snip-bg:#ffffff;
     --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color-scheme: light;
@@ -27,6 +28,7 @@
     --ink:#e8eaed; --muted:#9aa6b0; --faint:#6b7782;
     --accent:#d2693f; --accent-weak:#d2693f2e;
     --legend-bg:#19222bee; --grid-line:#ffffff06;
+    --snip-bg:#10161d;
     color-scheme: dark;
   }
   *{box-sizing:border-box}
@@ -229,6 +231,7 @@
     linear-gradient(var(--grid-line) 1px,transparent 1px) 0 0/22px 22px,
     linear-gradient(90deg,var(--grid-line) 1px,transparent 1px) 0 0/22px 22px,
     var(--paper);}
+  .canvas-wrap.plain-bg{background:var(--snip-bg)}
   #map{width:100%;height:100%;display:block;cursor:grab;touch-action:none}
   #map.boxing{cursor:crosshair}
   #map.panning{cursor:grabbing}
@@ -268,6 +271,8 @@
         <input type="checkbox" id="dark-toggle"><i class="switch"></i></label>
       <label class="toggle"><span>Gridlines</span>
         <input type="checkbox" id="grid-toggle" checked><i class="switch"></i></label>
+      <label class="toggle"><span>Background grid</span>
+        <input type="checkbox" id="bg-grid-toggle" checked><i class="switch"></i></label>
       <div class="swatch-grid">
         <div class="swatch"><label for="c-grid">Gridlines</label><input type="color" id="c-grid"></div>
         <div class="swatch"><label for="c-axis">Axes</label><input type="color" id="c-axis"></div>
@@ -454,6 +459,7 @@ const state = {
   showTitle:true, showXLabel:true, showYLabel:true,   // show each on the plot
   xlim:null, ylim:null,     // [min,max] in DISPLAY units, or null = auto-fit to data
   showGrid:true,
+  bgGrid:true,             // textured canvas backdrop (off = solid, for clean screen-snips)
   plotSize:0.80,           // fraction of the canvas the plot fills
   axisFont:14,             // px — tick + axis-title text
   legendFont:12,           // px — legend text
@@ -472,8 +478,8 @@ const state = {
 // to change those defaults; everything (state.color, swatches, plot, exports)
 // flows from here. Series colours are never touched. THEME also holds non-swatch
 // chrome (frame, figure background, legend) each mode needs.
-const LIGHT_STYLE = { grid:"#e4e0d6", axis:"#6f6a60" };
-const DARK_STYLE  = { grid:"#28323b", axis:"#7d8c97" };
+const LIGHT_STYLE = { grid:"#e4e0d6", axis:"#3a3733" };
+const DARK_STYLE  = { grid:"#28323b", axis:"#8b97a1" };
 const THEME = {
   light:{ palette:LIGHT_STYLE, frame:"#000000", plotBg:"#ffffff", plotBorder:"#bdb6a8", figureBg:"#ffffff",
           legendBg:"#ffffff", legendBorder:"#cfcabf", legendInk:"#20201d", legendScroll:"#cfcabf" },
@@ -717,7 +723,7 @@ function render(){
           .attr("stroke",THEME[state.theme].plotBorder).attr("stroke-width",1).attr("rx",2);
   drawAxes(xScale, yScale, ix0, ix1, iy0, iy1, L);
   elFrame.attr("x",ix0).attr("y",iy0).attr("width",ix1-ix0).attr("height",iy1-iy0)
-         .attr("stroke",THEME[state.theme].frame).attr("stroke-width",1.1);
+         .attr("stroke",state.color.axis).attr("stroke-width",1.1);
 
   renderTrajectories(xScale, yScale);
   renderLegend();
@@ -968,7 +974,7 @@ function currentConfig(){
     xUnit:state.xUnit, yUnit:state.yUnit, xlim:state.xlim, ylim:state.ylim,
     xLabel:state.xLabel, yLabel:state.yLabel, title:state.title,
     showTitle:state.showTitle, showXLabel:state.showXLabel, showYLabel:state.showYLabel,
-    showGrid:state.showGrid, plotSize:state.plotSize, color:{...state.color},
+    showGrid:state.showGrid, plotSize:state.plotSize, color:{...state.color}, bgGrid:state.bgGrid,
     axisFont:state.axisFont, legendFont:state.legendFont, titleFont:state.titleFont,
     showLegend:state.showLegend, legendLoc:state.legendLoc, theme:state.theme,
     pins: state.pins.map(p=>{ const idx=state.layers.findIndex(l=>l.id===p.layerId);
@@ -992,6 +998,7 @@ function applyConfig(cfg){
   if("xlim" in cfg) state.xlim=cfg.xlim;
   if("ylim" in cfg) state.ylim=cfg.ylim;
   if("showGrid" in cfg) state.showGrid=!!cfg.showGrid;
+  if("bgGrid" in cfg) state.bgGrid=!!cfg.bgGrid;
   if("plotSize" in cfg) state.plotSize=cfg.plotSize;
   if(cfg.axisFont!=null) state.axisFont=cfg.axisFont;
   if(cfg.legendFont!=null) state.legendFont=cfg.legendFont;
@@ -1047,6 +1054,7 @@ function syncControlsFromState(){
   populateAxisSelectors();
   $("x-mult").value=state.xMult; $("y-mult").value=state.yMult;
   $("grid-toggle").checked=state.showGrid;
+  $("bg-grid-toggle").checked=state.bgGrid; applyBgGrid();
   $("axis-font").value=state.axisFont; $("legend-font").value=state.legendFont; $("title-font").value=state.titleFont;
   $("plot-size").value=state.plotSize; $("plot-size-val").textContent=Math.round(state.plotSize*100)+"%";
   $("legend-toggle").checked=state.showLegend;
@@ -1465,6 +1473,8 @@ $("x-preset").addEventListener("change", e=>{ const v=e.target.value; if(v==="re
 $("y-preset").addEventListener("change", e=>{ const v=e.target.value; if(v==="reset") setYMult(1); else { const i=+v; if(MULT_PRESETS[i]) setYMult(MULT_PRESETS[i].k); } e.target.value=""; });
 
 $("grid-toggle").addEventListener("change", e=>{ state.showGrid=e.target.checked; render(); });
+function applyBgGrid(){ $("wrap").classList.toggle("plain-bg", !state.bgGrid); }
+$("bg-grid-toggle").addEventListener("change", e=>{ state.bgGrid=e.target.checked; applyBgGrid(); });
 $("axis-font").addEventListener("input", e=>{ const v=parseInt(e.target.value,10); if(v>=6&&v<=40){ state.axisFont=v; render(); } });
 $("title-font").addEventListener("input", e=>{ const v=parseInt(e.target.value,10); if(v>=6&&v<=60){ state.titleFont=v; render(); } });
 $("legend-font").addEventListener("input", e=>{ const v=parseInt(e.target.value,10); if(v>=6&&v<=40){ state.legendFont=v; render(); } });
@@ -1605,13 +1615,13 @@ Object.keys(colorMap).forEach(id=>{
 
 function resetView(){
   state.xlim=null; state.ylim=null;
-  state.showGrid=true; state.plotSize=0.80;
+  state.showGrid=true; state.plotSize=0.80; state.bgGrid=true;
   state.axisFont=14; state.legendFont=12; state.titleFont=20;
   state.xLabel=null; state.yLabel=null; state.title=null;
   state.showTitle=true; state.showXLabel=true; state.showYLabel=true;
   state.color={...THEME[state.theme].palette};
   state.legendLoc="right-outside";
-  $("grid-toggle").checked=true;
+  $("grid-toggle").checked=true; $("bg-grid-toggle").checked=true; applyBgGrid();
   $("plot-size").value=0.80; $("plot-size-val").textContent="80%";
   $("axis-font").value=14; $("legend-font").value=12; $("title-font").value=20;
   syncLegendLocControl(); syncColorInputs(); syncLabelFields();
@@ -1684,6 +1694,7 @@ new ResizeObserver(()=>resize()).observe($("wrap"));
   W=Math.round(r.width)||800; H=Math.round(r.height)||600;
   svg.attr("viewBox",`0 0 ${W} ${H}`).attr("width",W).attr("height",H);
   syncColorInputs();
+  applyBgGrid();
   // load any series embedded by a generator (e.g. a Python script)
   const tag=$("plot2d-data");
   if(tag && tag.textContent.trim()){
